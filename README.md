@@ -36,6 +36,15 @@ It will install WireGuard (kernel module and tools) on the server, configure it,
 
 Run the script again to add or remove clients!
 
+## Listenport 53
+
+Free up the port 53. Local DNS resolver listens on it. Follow thi guide:
+
+My bad. This is a common issue. I fixed this. If anyone else needs a solution, visit:
+
+https://medium.com/@niktrix/getting-rid-of-systemd-resolved-consuming-port-53-605f0234f32f
+https://www.reddit.com/r/WireGuard/comments/ilz0qm/cant_get_wg_to_work_on_port_53/
+
 ## Providers
 
 I recommend these cheap cloud providers for your VPN server:
