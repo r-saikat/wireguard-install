@@ -43,6 +43,20 @@ Free up the port 53. Local DNS resolver listens on it. Follow this guide:
 https://medium.com/@niktrix/getting-rid-of-systemd-resolved-consuming-port-53-605f0234f32f
 https://www.reddit.com/r/WireGuard/comments/ilz0qm/cant_get_wg_to_work_on_port_53/
 
+## Make wireguard listen on multiple ports
+
+Use this as an example:
+
+`iptables -t nat -I PREROUTING -i eth0 -d <yourIP/32> -p udp -m multiport --dports 53,80,4444  -j REDIRECT --to-ports 15351`
+Change the interface to ens3 if needed, add allowed IP list in CIDR format.
+
+To make this rule permanent, run 
+
+```
+sudo netfilter-persistent save
+sudo netfilter-persistent reload
+```
+
 ## Providers
 
 I recommend these cheap cloud providers for your VPN server:
