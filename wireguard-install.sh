@@ -3,6 +3,10 @@
 # Secure WireGuard server installer for Debian, Ubuntu, CentOS, Fedora and Arch Linux
 # https://github.com/angristan/wireguard-install
 
+RED='\033[0;31m'
+ORANGE='\033[0;33m'
+NC='\033[0m'
+
 function isRoot() {
 	if [ "${EUID}" -ne 0 ]; then
 		echo "You need to run this script as root"
@@ -144,14 +148,7 @@ function installWireGuard() {
 		fi
 		yum -y install kmod-wireguard wireguard-tools iptables qrencode
 	elif [[ ${OS} == 'arch' ]]; then
-		# Check if current running kernel is LTS
-		ARCH_KERNEL_RELEASE=$(uname -r)
-		if [[ ${ARCH_KERNEL_RELEASE} == *lts* ]]; then
-			pacman -S --needed --noconfirm linux-lts-headers
-		else
-			pacman -S --needed --noconfirm linux-headers
-		fi
-		pacman -S --needed --noconfirm wireguard-tools iptables qrencode
+		pacman -S --needed --noconfirm wireguard-tools qrencode
 	fi
 
 	# Make sure the directory exists (this does not seem the be the case on fedora)
@@ -199,19 +196,19 @@ net.ipv6.conf.all.forwarding = 1" >/etc/sysctl.d/wg.conf
 	systemctl start "wg-quick@${SERVER_WG_NIC}"
 	systemctl enable "wg-quick@${SERVER_WG_NIC}"
 
+	newClient
+	echo "If you want to add more clients, you simply need to run this script another time!"
+
 	# Check if WireGuard is running
 	systemctl is-active --quiet "wg-quick@${SERVER_WG_NIC}"
 	WG_RUNNING=$?
 
 	# WireGuard might not work if we updated the kernel. Tell the user to reboot
 	if [[ ${WG_RUNNING} -ne 0 ]]; then
-		echo -e "\nWARNING: WireGuard does not seem to be running."
-		echo "You can check if WireGuard is running with: systemctl status wg-quick@${SERVER_WG_NIC}"
-		echo "If you get something like \"Cannot find device ${SERVER_WG_NIC}\", please reboot!"
+		echo -e "\n${RED}WARNING: WireGuard does not seem to be running.${NC}"
+		echo -e "${ORANGE}You can check if WireGuard is running with: systemctl status wg-quick@${SERVER_WG_NIC}${NC}"
+		echo -e "${ORANGE}If you get something like \"Cannot find device ${SERVER_WG_NIC}\", please reboot!${NC}"
 	fi
-
-	newClient
-	echo "If you want to add more clients, you simply need to run this script another time!"
 }
 
 function newClient() {
@@ -245,10 +242,11 @@ function newClient() {
 		exit 1
 	fi
 
+	BASE_IP=$(echo "$SERVER_WG_IPV4" | awk -F '.' '{ print $1"."$2"."$3 }')
 	until [[ ${IPV4_EXISTS} == '0' ]]; do
-		read -rp "Client's WireGuard IPv4: ${SERVER_WG_IPV4::-1}" -e -i "${DOT_IP}" DOT_IP
-		CLIENT_WG_IPV4="${SERVER_WG_IPV4::-1}${DOT_IP}"
-		IPV4_EXISTS=$(grep -c "$CLIENT_WG_IPV4" "/etc/wireguard/${SERVER_WG_NIC}.conf")
+		read -rp "Client's WireGuard IPv4: ${BASE_IP}." -e -i "${DOT_IP}" DOT_IP
+		CLIENT_WG_IPV4="${BASE_IP}.${DOT_IP}"
+		IPV4_EXISTS=$(grep -c "$CLIENT_WG_IPV4/24" "/etc/wireguard/${SERVER_WG_NIC}.conf")
 
 		if [[ ${IPV4_EXISTS} == '1' ]]; then
 			echo ""
@@ -257,10 +255,11 @@ function newClient() {
 		fi
 	done
 
+	BASE_IP=$(echo "$SERVER_WG_IPV6" | awk -F '::' '{ print $1 }')
 	until [[ ${IPV6_EXISTS} == '0' ]]; do
-		read -rp "Client's WireGuard IPv6: ${SERVER_WG_IPV6::-1}" -e -i "${DOT_IP}" DOT_IP
-		CLIENT_WG_IPV6="${SERVER_WG_IPV6::-1}${DOT_IP}"
-		IPV6_EXISTS=$(grep -c "${CLIENT_WG_IPV6}" "/etc/wireguard/${SERVER_WG_NIC}.conf")
+		read -rp "Client's WireGuard IPv6: ${BASE_IP}::" -e -i "${DOT_IP}" DOT_IP
+		CLIENT_WG_IPV6="${BASE_IP}::${DOT_IP}"
+		IPV6_EXISTS=$(grep -c "${CLIENT_WG_IPV6}/64" "/etc/wireguard/${SERVER_WG_NIC}.conf")
 
 		if [[ ${IPV6_EXISTS} == '1' ]]; then
 			echo ""
@@ -275,11 +274,19 @@ function newClient() {
 	CLIENT_PRE_SHARED_KEY=$(wg genpsk)
 
 	# Home directory of the user, where the client configuration will be written
-	if [ -e "/home/${CLIENT_NAME}" ]; then # if $1 is a user name
+	if [ -e "/home/${CLIENT_NAME}" ]; then
+		# if $1 is a user name
 		HOME_DIR="/home/${CLIENT_NAME}"
-	elif [ "${SUDO_USER}" ]; then # if not, use SUDO_USER
-		HOME_DIR="/home/${SUDO_USER}"
-	else # if not SUDO_USER, use /root
+	elif [ "${SUDO_USER}" ]; then
+		# if not, use SUDO_USER
+		if [ "${SUDO_USER}" == "root" ]; then
+			# If running sudo as root
+			HOME_DIR="/root"
+		else
+			HOME_DIR="/home/${SUDO_USER}"
+		fi
+	else
+		# if not SUDO_USER, use /root
 		HOME_DIR="/root"
 	fi
 
@@ -302,7 +309,7 @@ PublicKey = ${CLIENT_PUB_KEY}
 PresharedKey = ${CLIENT_PRE_SHARED_KEY}
 AllowedIPs = ${CLIENT_WG_IPV4}/32,${CLIENT_WG_IPV6}/128" >>"/etc/wireguard/${SERVER_WG_NIC}.conf"
 
-	systemctl restart "wg-quick@${SERVER_WG_NIC}"
+	wg syncconf "${SERVER_WG_NIC}" <(wg-quick strip "${SERVER_WG_NIC}")
 
 	echo -e "\nHere is your client config file as a QR Code:"
 
@@ -340,7 +347,7 @@ function revokeClient() {
 	rm -f "${HOME}/${SERVER_WG_NIC}-client-${CLIENT_NAME}.conf"
 
 	# restart wireguard to apply changes
-	systemctl restart "wg-quick@${SERVER_WG_NIC}"
+	wg syncconf "${SERVER_WG_NIC}" <(wg-quick strip "${SERVER_WG_NIC}")
 }
 
 function uninstallWg() {
